@@ -2,126 +2,236 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telekinesis Engine</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Telekinesis Engine V2</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        body { margin: 0; overflow: hidden; background: #050505; font-family: 'Courier New', monospace; touch-action: none; }
+        
+        /* The Overlay */
         #overlay {
             position: absolute; width: 100%; height: 100%; background: #000;
             display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100;
+            transition: opacity 1s;
         }
         button {
-            padding: 20px 50px; background: none; border: 2px solid #00ffcc;
-            color: #00ffcc; font-weight: bold; cursor: pointer; letter-spacing: 2px;
+            padding: 20px 40px; background: transparent; 
+            border: 2px solid #00ffcc; color: #00ffcc; 
+            font-size: 16px; font-weight: bold; cursor: pointer; 
+            letter-spacing: 2px; box-shadow: 0 0 15px #00ffcc44;
         }
-        #status {
-            position: absolute; bottom: 20px; width: 100%; text-align: center;
-            color: #444; font-size: 10px; letter-spacing: 1px; pointer-events: none;
+        button:active { background: #00ffcc; color: #000; }
+        
+        /* Status Text */
+        #hud {
+            position: absolute; top: 20px; left: 20px; 
+            color: #00ffcc; font-size: 12px; pointer-events: none; opacity: 0.7;
         }
-        /* Hidden video */
-        #v { position: absolute; visibility: hidden; pointer-events: none; }
+        
+        /* KEY FIX: Video is transparent, NOT hidden */
+        #video-feed { 
+            position: absolute; top: 0; left: 0; 
+            width: 1px; height: 1px; 
+            opacity: 0.01; pointer-events: none; 
+        }
     </style>
 </head>
 <body>
 
 <div id="overlay">
-    <button onclick="startTelekinesis()">GRANT ACCESS & START</button>
+    <h1 style="color:white; font-size: 20px; margin-bottom: 30px;">NEURAL LINK</h1>
+    <button id="start-btn">INITIALIZE SYSTEM</button>
+    <p id="error-log" style="color:red; margin-top:20px; font-size:12px;"></p>
 </div>
-<div id="status">NEURAL LINK: STANDBY</div>
-<video id="v" playsinline></video>
 
+<div id="hud">
+    SYSTEM: <span id="sys-status">OFFLINE</span><br>
+    HANDS DETECTED: <span id="hand-count">0</span>
+</div>
+
+<video id="video-feed" playsinline muted autoplay></video>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script type="module">
 import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
-import { Hands } from 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js';
-import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
 
-let scene, camera, renderer, crystal;
-let targetPos = new THREE.Vector3(0, 0, 0);
+// Configuration
+const SENSITIVITY_MOVE = 40;
+const SENSITIVITY_ROTATE = 2.5;
+
+// Global State
+let scene, camera, renderer, crystal, core;
+let targetPos = new THREE.Vector3();
 let targetScale = new THREE.Vector3(1, 1, 1);
-let targetRotation = new THREE.Euler();
+let targetRot = { x: 0, y: 0 };
+let isAudioInit = false;
+let oscillator, gainNode;
 
-window.startTelekinesis = async () => {
-    document.getElementById('overlay').style.display = 'none';
-    document.getElementById('status').innerText = "NEURAL LINK: ACTIVE";
+// 1. Audio Engine (The "Hum")
+function initAudio() {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
     
-    // 1. Scene Setup
+    const actx = new AudioContext();
+    oscillator = actx.createOscillator();
+    gainNode = actx.createGain();
+    
+    oscillator.type = 'sine';
+    oscillator.frequency.value = 100; // Deep hum
+    gainNode.gain.value = 0; // Start silent
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(actx.destination);
+    oscillator.start();
+    isAudioInit = true;
+}
+
+function updateAudio(speed, pinchStrength) {
+    if (!isAudioInit) return;
+    // Pitch goes up when moving fast
+    oscillator.frequency.setTargetAtTime(100 + (speed * 50), 0, 0.1);
+    // Volume goes up when pinching
+    gainNode.gain.setTargetAtTime(pinchStrength * 0.1, 0, 0.1);
+}
+
+// 2. Start Sequence
+document.getElementById('start-btn').addEventListener('click', async () => {
+    try {
+        initAudio();
+        document.getElementById('start-btn').innerText = "CALIBRATING...";
+        
+        // Force Camera Permission First
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: 'user', width: 640, height: 480 } 
+        });
+        
+        const video = document.getElementById('video-feed');
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+            video.play();
+            initThree();
+            initAI(video);
+            document.getElementById('overlay').style.opacity = 0;
+            setTimeout(() => document.getElementById('overlay').style.display = 'none', 1000);
+            document.getElementById('sys-status').innerText = "ONLINE";
+        };
+
+    } catch (e) {
+        document.getElementById('error-log').innerText = "ERROR: " + e.message;
+    }
+});
+
+// 3. Graphics Engine
+function initThree() {
     scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x000000, 0.03);
+
     camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
     camera.position.z = 20;
 
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
     document.body.appendChild(renderer.domElement);
 
-    // 2. The "Attractive" Object: An Icosahedron (Crystal)
-    const geometry = new THREE.IcosahedronGeometry(5, 0); // Low-poly for minimal look
-    const material = new THREE.MeshPhongMaterial({
-        color: 0x00ffcc,
-        wireframe: true,
-        emissive: 0x004433,
-        shininess: 100
-    });
-    crystal = new THREE.Mesh(geometry, material);
-    scene.add(crystal);
-
-    // Lighting
-    const light = new THREE.PointLight(0xffffff, 1, 100);
-    light.position.set(10, 10, 10);
-    scene.add(light);
-    scene.add(new THREE.AmbientLight(0x222222));
-
-    // 3. Hand Tracking
-    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7 });
+    // The "Telekinetic" Object
+    const group = new THREE.Group();
     
-    hands.onResults(results => {
-        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-            const h1 = results.multiHandLandmarks[0];
-            
-            // FLY: Move object based on index finger position
-            targetPos.x = (0.5 - h1[8].x) * 40;
-            targetPos.y = (0.5 - h1[8].y) * 30;
+    // Outer Cage
+    const geoCage = new THREE.IcosahedronGeometry(4, 1);
+    const matCage = new THREE.MeshBasicMaterial({ 
+        color: 0x00ffcc, wireframe: true, transparent: true, opacity: 0.3 
+    });
+    crystal = new THREE.Mesh(geoCage, matCage);
+    group.add(crystal);
 
-            // SQUEEZE / TEAR: Use distance between thumb and index
-            const pinchDist = Math.hypot(h1[4].x - h1[8].x, h1[4].y - h1[8].y);
+    // Inner Core (Glowing)
+    const geoCore = new THREE.OctahedronGeometry(2, 0);
+    const matCore = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: false });
+    core = new THREE.Mesh(geoCore, matCore);
+    group.add(core);
+
+    scene.add(group);
+    
+    // Global references for animation
+    window.teleObject = group;
+}
+
+// 4. AI Logic
+function initAI(videoElement) {
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6 });
+
+    hands.onResults(results => {
+        const handsFound = results.multiHandLandmarks.length;
+        document.getElementById('hand-count').innerText = handsFound;
+
+        if (handsFound > 0) {
+            const h1 = results.multiHandLandmarks[0];
+            const indexTip = h1[8];
+            const thumbTip = h1[4];
+
+            // 1. POSITION (Index finger drives position)
+            // Mapping 0-1 coordinates to 3D space (-20 to 20)
+            targetPos.x = (0.5 - indexTip.x) * SENSITIVITY_MOVE;
+            targetPos.y = (0.5 - indexTip.y) * SENSITIVITY_MOVE;
+
+            // 2. SCALE / GRAB (Distance between Index & Thumb)
+            const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
             
-            if (results.multiHandLandmarks.length === 1) {
-                // Single hand zoom/scale
-                let s = THREE.MathUtils.mapLinear(pinchDist, 0.05, 0.4, 0.5, 3);
-                targetScale.set(s, s, s);
+            // "Telekinetic Pinch" Logic
+            if (pinchDist < 0.05) {
+                // If pinched tight, shrink object + VIBRATE
+                targetScale.set(0.5, 0.5, 0.5);
+                core.material.color.setHex(0xff0055); // Turn Red
+                
+                // HAPTIC FEEDBACK (Android Only)
+                if (navigator.vibrate) navigator.vibrate(15); 
+                updateAudio(1, 1); // Loud hum
             } else {
-                // Two hand "Tear" logic
-                const h2 = results.multiHandLandmarks[1];
-                const handDist = Math.hypot(h1[8].x - h2[8].x, h1[8].y - h2[8].y);
-                targetScale.set(handDist * 10, 1, 1); // Stretches on X axis
+                // Relaxed hand = Normal size
+                // Map distance to size (Open hand = Big object)
+                let s = THREE.MathUtils.mapLinear(pinchDist, 0.05, 0.3, 0.5, 2.5);
+                targetScale.set(s, s, s);
+                core.material.color.setHex(0x00ffff); // Back to Blue
+                updateAudio(0.5, 0.2); // Quiet hum
             }
-            
-            // ROTATE: Based on wrist to middle finger angle
-            targetRotation.z = Math.atan2(h1[12].y - h1[0].y, h1[12].x - h1[0].x);
+
+            // 3. ROTATION (Tilt of the wrist)
+            targetRot.x = (h1[9].y - 0.5) * 3;
+            targetRot.y = (h1[9].x - 0.5) * 3;
+        } else {
+            // No hands? Return to center
+            targetPos.set(0, 0, 0);
+            targetScale.set(1, 1, 1);
+            updateAudio(0, 0); // Silence
         }
     });
 
-    const v = document.getElementById('v');
-    const cam = new Camera(v, {
-        onFrame: async () => { await hands.send({image: v}); },
+    // Start processing loop
+    const cameraUtils = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({image: videoElement}); },
         width: 640, height: 480
     });
-    cam.start();
+    cameraUtils.start();
     animate();
-};
+}
 
 function animate() {
     requestAnimationFrame(animate);
-    
-    // Smooth Interpolation (The "Weight" of Telekinesis)
-    crystal.position.lerp(targetPos, 0.1);
-    crystal.scale.lerp(targetScale, 0.1);
-    crystal.rotation.z += (targetRotation.z - crystal.rotation.z) * 0.1;
-    
-    // Idle floating animation
-    crystal.rotation.y += 0.01;
-    
+
+    if (window.teleObject) {
+        // Smooth Physics (Lerp)
+        window.teleObject.position.lerp(targetPos, 0.08); // 0.08 = laggy "heavy" feel
+        window.teleObject.scale.lerp(targetScale, 0.1);
+        
+        window.teleObject.rotation.x += (targetRot.x - window.teleObject.rotation.x) * 0.05;
+        window.teleObject.rotation.y += (targetRot.y - window.teleObject.rotation.y) * 0.05;
+
+        // Idle Spin
+        crystal.rotation.z += 0.005;
+        core.rotation.y -= 0.02;
+    }
+
     renderer.render(scene, camera);
 }
 </script>
