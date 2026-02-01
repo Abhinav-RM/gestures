@@ -2,169 +2,461 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Echo Particle Morph</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AR Finger Shooter</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
     <style>
-        body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: 'Courier New', monospace; }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Courier New', Courier, monospace;
+            touch-action: none; /* Prevent scroll on mobile */
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* The Camera Feed */
+        #input-video {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror effect */
+            z-index: 1;
+        }
+
+        /* The Game Layer */
+        #output-canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            transform: scaleX(-1); /* Mirror canvas to match video */
+        }
+
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 3;
+            pointer-events: none; /* Let clicks pass through */
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .hud-text {
+            color: #0ff;
+            text-shadow: 0 0 10px #0ff;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
         #start-screen {
-            position: absolute; width: 100%; height: 100%; background: #000;
-            display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1000;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            pointer-events: auto;
         }
+
+        h1 {
+            color: #fff;
+            font-size: 40px;
+            margin-bottom: 10px;
+            text-shadow: 0 0 20px #f0f;
+        }
+
+        p {
+            color: #ccc;
+            font-size: 16px;
+            max-width: 80%;
+            line-height: 1.5;
+        }
+
         button {
-            padding: 15px 40px; background: #00ffcc; border: none; border-radius: 4px;
-            font-weight: bold; cursor: pointer; box-shadow: 0 0 20px #00ffcc55;
+            background: #0ff;
+            border: none;
+            padding: 15px 40px;
+            font-size: 20px;
+            font-weight: bold;
+            color: #000;
+            border-radius: 30px;
+            cursor: pointer;
+            margin-top: 20px;
+            box-shadow: 0 0 20px #0ff;
+            transition: transform 0.2s;
         }
-        #ui-panel {
-            position: absolute; top: 10px; left: 10px; pointer-events: none; z-index: 10;
+
+        button:active {
+            transform: scale(0.95);
         }
-        .stat { color: #00ffcc; font-size: 0.9rem; margin-bottom: 5px; }
-        video { position: absolute; bottom: 10px; right: 10px; width: 100px; height: 75px; border-radius: 5px; opacity: 0.6; transform: scaleX(-1); }
+
+        /* Loading Spinner */
+        .loader {
+            border: 5px solid #333;
+            border-top: 5px solid #0ff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            display: none;
+            margin-top: 20px;
+        }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
-<div id="start-screen">
-    <h1>ECHO PARTICLE SYSTEM</h1>
-    <p>Hand-Tracked 3D Environment</p>
-    <button onclick="init()">INITIALIZE</button>
+<div id="game-container">
+    <video id="input-video" playsinline></video>
+    <canvas id="output-canvas"></canvas>
+    
+    <div id="ui-layer">
+        <div class="hud-text">SCORE: <span id="score">0</span></div>
+        <div class="hud-text" style="text-align: right; font-size: 14px;">PINCH TO SHOOT</div>
+    </div>
+
+    <div id="start-screen">
+        <h1>NEON FINGER</h1>
+        <p>1. Point your index finger to AIM.<br>2. Pinch (Thumb + Index) to SHOOT.<br>3. Allow Camera access to start.</p>
+        <button id="start-btn">START MISSION</button>
+        <div class="loader" id="loader"></div>
+        <p id="status-msg" style="margin-top: 10px; font-size: 12px; color: #666;"></p>
+    </div>
 </div>
 
-<div id="ui-panel">
-    <div class="stat">MODE: <span id="current-shape">SPHERE</span></div>
-    <div class="stat">GESTURE: <span id="gesture-info">WAITING...</span></div>
-</div>
+<script>
+    // --- Configuration ---
+    const VIDEO_Element = document.getElementById('input-video');
+    const CANVAS_Element = document.getElementById('output-canvas');
+    const CTX = CANVAS_Element.getContext('2d');
+    const START_BTN = document.getElementById('start-btn');
+    const LOADER = document.getElementById('loader');
+    const SCORE_EL = document.getElementById('score');
+    const START_SCREEN = document.getElementById('start-screen');
+    const STATUS_MSG = document.getElementById('status-msg');
 
-<video id="webcam" playsinline muted></video>
+    let score = 0;
+    let gameActive = false;
+    let lastShotTime = 0;
+    
+    // Game Objects
+    let balloons = [];
+    let particles = [];
+    let fingerX = 0;
+    let fingerY = 0;
+    let isPinching = false;
 
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-<script type="module">
-import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
+    // Audio Context
+    let audioCtx;
 
-const PARTICLE_COUNT = 8000; 
-let scene, camera, renderer, particles, geometry;
-let targetPositions = new Float32Array(PARTICLE_COUNT * 3);
-let currentPositions = new Float32Array(PARTICLE_COUNT * 3);
-let morphSpeed = 0.08;
-let shapeIndex = 0;
-let lastFistTime = 0;
+    // --- Audio System (Synthesizer) ---
+    function initAudio() {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext();
+    }
 
-// --- 1. Shape Generators ---
-const shapes = {
-    Sphere: () => {
-        const data = new Float32Array(PARTICLE_COUNT * 3);
-        for(let i=0; i<PARTICLE_COUNT; i++) {
-            const phi = Math.acos(-1 + (2 * i) / PARTICLE_COUNT);
-            const theta = Math.sqrt(PARTICLE_COUNT * Math.PI) * phi;
-            data[i*3] = 10 * Math.cos(theta) * Math.sin(phi);
-            data[i*3+1] = 10 * Math.sin(theta) * Math.sin(phi);
-            data[i*3+2] = 10 * Math.cos(phi);
+    function playShootSound() {
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(110, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.1);
+    }
+
+    function playPopSound() {
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.1);
+    }
+
+    // --- Game Logic ---
+
+    class Balloon {
+        constructor() {
+            this.reset();
         }
-        return data;
-    },
-    Heart: () => {
-        const data = new Float32Array(PARTICLE_COUNT * 3);
-        for(let i=0; i<PARTICLE_COUNT; i++) {
-            const t = Math.random() * Math.PI * 2;
-            data[i*3] = 0.6 * (16 * Math.pow(Math.sin(t), 3));
-            data[i*3+1] = 0.6 * (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
-            data[i*3+2] = (Math.random() - 0.5) * 5;
+
+        reset() {
+            this.radius = 30 + Math.random() * 20;
+            this.x = Math.random() * CANVAS_Element.width;
+            this.y = CANVAS_Element.height + this.radius;
+            this.speed = 1 + Math.random() * 2;
+            this.wobble = Math.random() * Math.PI * 2;
+            this.hue = Math.floor(Math.random() * 360);
+            this.active = true;
         }
-        return data;
-    },
-    Saturn: () => {
-        const data = new Float32Array(PARTICLE_COUNT * 3);
-        for(let i=0; i<PARTICLE_COUNT; i++) {
-            if(i < PARTICLE_COUNT * 0.4) { // Planet
-                const phi = Math.random() * Math.PI;
-                const theta = Math.random() * Math.PI * 2;
-                data[i*3] = 6 * Math.sin(phi) * Math.cos(theta);
-                data[i*3+1] = 6 * Math.sin(phi) * Math.sin(theta);
-                data[i*3+2] = 6 * Math.cos(phi);
-            } else { // Rings
-                const angle = Math.random() * Math.PI * 2;
-                const r = 8 + Math.random() * 6;
-                data[i*3] = r * Math.cos(angle);
-                data[i*3+1] = (Math.random() - 0.5) * 0.5;
-                data[i*3+2] = r * Math.sin(angle);
+
+        update() {
+            if (!this.active) return;
+            this.y -= this.speed;
+            this.x += Math.sin(this.y * 0.01 + this.wobble) * 0.5;
+
+            // Reset if goes off top
+            if (this.y < -this.radius) {
+                this.reset();
             }
         }
-        return data;
+
+        draw() {
+            if (!this.active) return;
+            CTX.beginPath();
+            CTX.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            CTX.fillStyle = `hsla(${this.hue}, 70%, 60%, 0.8)`;
+            CTX.fill();
+            // Shine
+            CTX.beginPath();
+            CTX.arc(this.x - this.radius * 0.3, this.y - this.radius * 0.3, this.radius * 0.2, 0, Math.PI * 2);
+            CTX.fillStyle = 'rgba(255,255,255,0.4)';
+            CTX.fill();
+        }
     }
-};
 
-const shapeKeys = Object.keys(shapes);
+    class Particle {
+        constructor(x, y, hue) {
+            this.x = x;
+            this.y = y;
+            this.hue = hue;
+            this.angle = Math.random() * Math.PI * 2;
+            this.speed = Math.random() * 5 + 2;
+            this.life = 1.0;
+        }
 
-window.init = async () => {
-    document.getElementById('start-screen').style.display = 'none';
-    const video = document.getElementById('webcam');
+        update() {
+            this.x += Math.cos(this.angle) * this.speed;
+            this.y += Math.sin(this.angle) * this.speed;
+            this.life -= 0.05;
+        }
+
+        draw() {
+            CTX.globalAlpha = this.life;
+            CTX.fillStyle = `hsl(${this.hue}, 100%, 50%)`;
+            CTX.beginPath();
+            CTX.arc(this.x, this.y, 3, 0, Math.PI * 2);
+            CTX.fill();
+            CTX.globalAlpha = 1.0;
+        }
+    }
+
+    // Initialize Balloons
+    for (let i = 0; i < 5; i++) {
+        balloons.push(new Balloon());
+    }
+
+    function checkCollisions() {
+        balloons.forEach(b => {
+            if (!b.active) return;
+            const dx = fingerX - b.x;
+            const dy = fingerY - b.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance < b.radius) {
+                // POP!
+                playPopSound();
+                b.active = false;
+                score += 10;
+                SCORE_EL.innerText = score;
+                
+                // Spawn particles
+                for (let i = 0; i < 10; i++) {
+                    particles.push(new Particle(b.x, b.y, b.hue));
+                }
+
+                // Respawn balloon after delay
+                setTimeout(() => b.reset(), 1000);
+            }
+        });
+    }
+
+    function drawGame() {
+        // Clear canvas (but keep transparent to see video)
+        CTX.clearRect(0, 0, CANVAS_Element.width, CANVAS_Element.height);
+
+        // Draw Balloons
+        balloons.forEach(b => {
+            b.update();
+            b.draw();
+        });
+
+        // Draw Particles
+        particles.forEach((p, index) => {
+            p.update();
+            p.draw();
+            if (p.life <= 0) particles.splice(index, 1);
+        });
+
+        // Draw Crosshair (at finger position)
+        if (fingerX !== 0 && fingerY !== 0) {
+            CTX.strokeStyle = isPinching ? '#f00' : '#0ff';
+            CTX.lineWidth = 3;
+            CTX.beginPath();
+            CTX.arc(fingerX, fingerY, 20, 0, Math.PI * 2);
+            CTX.stroke();
+            
+            // Cross lines
+            CTX.beginPath();
+            CTX.moveTo(fingerX - 30, fingerY);
+            CTX.lineTo(fingerX + 30, fingerY);
+            CTX.moveTo(fingerX, fingerY - 30);
+            CTX.lineTo(fingerX, fingerY + 30);
+            CTX.stroke();
+
+            if (isPinching) {
+                // Muzzle flash visual
+                CTX.fillStyle = 'rgba(255, 50, 50, 0.5)';
+                CTX.beginPath();
+                CTX.arc(fingerX, fingerY, 40, 0, Math.PI * 2);
+                CTX.fill();
+            }
+        }
+        
+        requestAnimationFrame(drawGame);
+    }
+
+
+    // --- MediaPipe Setup ---
     
-    // Three.js Setup
-    scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.z = 30;
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
+    function onResults(results) {
+        if (!gameActive) return;
 
-    // Particle Geometry
-    geometry = new THREE.BufferGeometry();
-    const startData = shapes.Sphere();
-    currentPositions.set(startData);
-    targetPositions.set(startData);
-    geometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
-    
-    const mat = new THREE.PointsMaterial({ size: 0.2, color: 0x00ffcc, transparent: true, opacity: 0.8 });
-    particles = new THREE.Points(geometry, mat);
-    scene.add(particles);
+        // Ensure canvas matches video size
+        CANVAS_Element.width = VIDEO_Element.videoWidth;
+        CANVAS_Element.height = VIDEO_Element.videoHeight;
 
-    // MediaPipe
-    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6 });
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const landmarks = results.multiHandLandmarks[0];
+            
+            // Get Index Finger Tip (Landmark 8)
+            // Note: MediaPipe coords are 0.0 - 1.0 normalized
+            fingerX = landmarks[8].x * CANVAS_Element.width;
+            fingerY = landmarks[8].y * CANVAS_Element.height;
+
+            // Get Thumb Tip (Landmark 4) for pinch detection
+            const thumbX = landmarks[4].x * CANVAS_Element.width;
+            const thumbY = landmarks[4].y * CANVAS_Element.height;
+
+            // Calculate distance for pinch
+            const dist = Math.hypot(fingerX - thumbX, fingerY - thumbY);
+            
+            // Pinch Threshold (adjust based on testing)
+            const pinchThreshold = 40; 
+
+            if (dist < pinchThreshold) {
+                if (!isPinching) {
+                    // Trigger Start
+                    isPinching = true;
+                    playShootSound();
+                    checkCollisions();
+                }
+            } else {
+                isPinching = false;
+            }
+        }
+    }
+
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
+
     hands.onResults(onResults);
 
-    const cam = new Camera(video, {
-        onFrame: async () => { await hands.send({image: video}); },
-        width: 640, height: 480
+    // --- Initialization & Camera ---
+
+    async function startCamera() {
+        try {
+            const camera = new Camera(VIDEO_Element, {
+                onFrame: async () => {
+                    await hands.send({image: VIDEO_Element});
+                },
+                width: 1280,
+                height: 720
+            });
+            await camera.start();
+            
+            STATUS_MSG.innerText = "Camera Active. Tracking Hands...";
+            LOADER.style.display = "none";
+            START_SCREEN.style.display = "none";
+            gameActive = true;
+            drawGame(); // Start Loop
+
+        } catch (error) {
+            console.error(error);
+            STATUS_MSG.innerText = "Error: " + error.message;
+            LOADER.style.display = "none";
+            START_BTN.style.display = "block";
+        }
+    }
+
+    START_BTN.addEventListener('click', () => {
+        START_BTN.style.display = "none";
+        LOADER.style.display = "block";
+        STATUS_MSG.innerText = "Requesting Camera Permission...";
+        
+        initAudio(); // Must start on user interaction
+        
+        // Android/Mobile explicit permission request logic often helps here
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+            .then((stream) => {
+                VIDEO_Element.srcObject = stream;
+                // Once stream is active, hand it to MediaPipe Camera Utils
+                startCamera(); 
+            })
+            .catch((err) => {
+                STATUS_MSG.innerText = "Camera Denied: " + err;
+                LOADER.style.display = "none";
+                START_BTN.style.display = "block";
+            });
     });
-    cam.start();
-    animate();
-};
 
-function onResults(results) {
-    if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) return;
-    const hand = results.multiHandLandmarks[0];
-
-    // 1. Rotation (Index Tip - Landmark 8)
-    particles.rotation.y = (0.5 - hand[8].x) * 2;
-    particles.rotation.x = (hand[8].y - 0.5) * 2;
-
-    // 2. Pinch to Expand (Thumb Tip [4] to Index Tip [8])
-    const dist = Math.hypot(hand[4].x - hand[8].x, hand[4].y - hand[8].y);
-    const scale = THREE.MathUtils.mapLinear(dist, 0.05, 0.3, 1, 3);
-    particles.scale.setScalar(scale);
-
-    // 3. Fist to Change Shape (Tips to Wrist [0])
-    const wrist = hand[0];
-    const isFist = [8, 12, 16, 20].every(tip => Math.hypot(hand[tip].x - wrist.x, hand[tip].y - wrist.y) < 0.2);
-    
-    if (isFist && Date.now() - lastFistTime > 1500) {
-        shapeIndex = (shapeIndex + 1) % shapeKeys.length;
-        targetPositions.set(shapes[shapeKeys[shapeIndex]]());
-        document.getElementById('current-shape').innerText = shapeKeys[shapeIndex];
-        lastFistTime = Date.now();
-    }
-}
-
-function animate() {
-    requestAnimationFrame(animate);
-    const pos = geometry.attributes.position.array;
-    for (let i = 0; i < pos.length; i++) {
-        pos[i] += (targetPositions[i] - pos[i]) * morphSpeed;
-    }
-    geometry.attributes.position.needsUpdate = true;
-    renderer.render(scene, camera);
-}
 </script>
+
 </body>
 </html>
