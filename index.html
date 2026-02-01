@@ -2,238 +2,111 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Telekinesis Engine V2</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Diagnostic</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #050505; font-family: 'Courier New', monospace; touch-action: none; }
-        
-        /* The Overlay */
-        #overlay {
-            position: absolute; width: 100%; height: 100%; background: #000;
-            display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100;
-            transition: opacity 1s;
+        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; font-size: 14px; }
+        h2 { border-bottom: 1px solid #0f0; padding-bottom: 10px; }
+        .log-line { margin: 5px 0; border-left: 2px solid #333; padding-left: 10px; }
+        .error { color: #ff3333; font-weight: bold; }
+        .success { color: #33ff33; }
+        button { 
+            padding: 15px; width: 100%; margin: 20px 0; 
+            background: #222; border: 1px solid #0f0; color: #0f0; font-size: 16px; 
         }
-        button {
-            padding: 20px 40px; background: transparent; 
-            border: 2px solid #00ffcc; color: #00ffcc; 
-            font-size: 16px; font-weight: bold; cursor: pointer; 
-            letter-spacing: 2px; box-shadow: 0 0 15px #00ffcc44;
-        }
-        button:active { background: #00ffcc; color: #000; }
-        
-        /* Status Text */
-        #hud {
-            position: absolute; top: 20px; left: 20px; 
-            color: #00ffcc; font-size: 12px; pointer-events: none; opacity: 0.7;
-        }
-        
-        /* KEY FIX: Video is transparent, NOT hidden */
-        #video-feed { 
-            position: absolute; top: 0; left: 0; 
-            width: 1px; height: 1px; 
-            opacity: 0.01; pointer-events: none; 
-        }
+        #video-preview { width: 150px; border: 1px solid #444; margin-top: 10px; }
     </style>
 </head>
 <body>
 
-<div id="overlay">
-    <h1 style="color:white; font-size: 20px; margin-bottom: 30px;">NEURAL LINK</h1>
-    <button id="start-btn">INITIALIZE SYSTEM</button>
-    <p id="error-log" style="color:red; margin-top:20px; font-size:12px;"></p>
-</div>
+<h2>DIAGNOSTIC MODE</h2>
+<div id="logs">Waiting for user input...</div>
+<button onclick="runDiagnostics()">START DIAGNOSTIC TEST</button>
+<video id="video-preview" playsinline muted autoplay></video>
 
-<div id="hud">
-    SYSTEM: <span id="sys-status">OFFLINE</span><br>
-    HANDS DETECTED: <span id="hand-count">0</span>
-</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
-<video id="video-feed" playsinline muted autoplay></video>
-
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-<script type="module">
-import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
-
-// Configuration
-const SENSITIVITY_MOVE = 40;
-const SENSITIVITY_ROTATE = 2.5;
-
-// Global State
-let scene, camera, renderer, crystal, core;
-let targetPos = new THREE.Vector3();
-let targetScale = new THREE.Vector3(1, 1, 1);
-let targetRot = { x: 0, y: 0 };
-let isAudioInit = false;
-let oscillator, gainNode;
-
-// 1. Audio Engine (The "Hum")
-function initAudio() {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    
-    const actx = new AudioContext();
-    oscillator = actx.createOscillator();
-    gainNode = actx.createGain();
-    
-    oscillator.type = 'sine';
-    oscillator.frequency.value = 100; // Deep hum
-    gainNode.gain.value = 0; // Start silent
-    
-    oscillator.connect(gainNode);
-    gainNode.connect(actx.destination);
-    oscillator.start();
-    isAudioInit = true;
-}
-
-function updateAudio(speed, pinchStrength) {
-    if (!isAudioInit) return;
-    // Pitch goes up when moving fast
-    oscillator.frequency.setTargetAtTime(100 + (speed * 50), 0, 0.1);
-    // Volume goes up when pinching
-    gainNode.gain.setTargetAtTime(pinchStrength * 0.1, 0, 0.1);
-}
-
-// 2. Start Sequence
-document.getElementById('start-btn').addEventListener('click', async () => {
-    try {
-        initAudio();
-        document.getElementById('start-btn').innerText = "CALIBRATING...";
-        
-        // Force Camera Permission First
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { facingMode: 'user', width: 640, height: 480 } 
-        });
-        
-        const video = document.getElementById('video-feed');
-        video.srcObject = stream;
-        video.onloadedmetadata = () => {
-            video.play();
-            initThree();
-            initAI(video);
-            document.getElementById('overlay').style.opacity = 0;
-            setTimeout(() => document.getElementById('overlay').style.display = 'none', 1000);
-            document.getElementById('sys-status').innerText = "ONLINE";
-        };
-
-    } catch (e) {
-        document.getElementById('error-log').innerText = "ERROR: " + e.message;
+<script>
+    const logger = document.getElementById('logs');
+    function log(msg, type = 'normal') {
+        const div = document.createElement('div');
+        div.className = 'log-line ' + type;
+        div.innerText = `> ${msg}`;
+        logger.appendChild(div);
     }
-});
 
-// 3. Graphics Engine
-function initThree() {
-    scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x000000, 0.03);
+    window.onerror = function(msg, url, line) {
+        log(`CRASH: ${msg} (Line ${line})`, 'error');
+    };
 
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-    camera.position.z = 20;
+    async function runDiagnostics() {
+        logger.innerHTML = ''; // Clear logs
+        log("Test 1: Check Libraries...");
+        
+        // STEP 1: Library Check
+        if (window.THREE) log("✅ Three.js Loaded", 'success');
+        else log("❌ Three.js MISSING", 'error');
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
+        if (window.Hands) log("✅ MediaPipe Hands Loaded", 'success');
+        else log("❌ MediaPipe Hands MISSING", 'error');
 
-    // The "Telekinetic" Object
-    const group = new THREE.Group();
-    
-    // Outer Cage
-    const geoCage = new THREE.IcosahedronGeometry(4, 1);
-    const matCage = new THREE.MeshBasicMaterial({ 
-        color: 0x00ffcc, wireframe: true, transparent: true, opacity: 0.3 
-    });
-    crystal = new THREE.Mesh(geoCage, matCage);
-    group.add(crystal);
-
-    // Inner Core (Glowing)
-    const geoCore = new THREE.OctahedronGeometry(2, 0);
-    const matCore = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: false });
-    core = new THREE.Mesh(geoCore, matCore);
-    group.add(core);
-
-    scene.add(group);
-    
-    // Global references for animation
-    window.teleObject = group;
-}
-
-// 4. AI Logic
-function initAI(videoElement) {
-    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6 });
-
-    hands.onResults(results => {
-        const handsFound = results.multiHandLandmarks.length;
-        document.getElementById('hand-count').innerText = handsFound;
-
-        if (handsFound > 0) {
-            const h1 = results.multiHandLandmarks[0];
-            const indexTip = h1[8];
-            const thumbTip = h1[4];
-
-            // 1. POSITION (Index finger drives position)
-            // Mapping 0-1 coordinates to 3D space (-20 to 20)
-            targetPos.x = (0.5 - indexTip.x) * SENSITIVITY_MOVE;
-            targetPos.y = (0.5 - indexTip.y) * SENSITIVITY_MOVE;
-
-            // 2. SCALE / GRAB (Distance between Index & Thumb)
-            const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+        // STEP 2: Camera Check
+        log("Test 2: Requesting Camera...");
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: 'user', width: 640 } 
+            });
+            log("✅ Camera Permission GRANTED", 'success');
             
-            // "Telekinetic Pinch" Logic
-            if (pinchDist < 0.05) {
-                // If pinched tight, shrink object + VIBRATE
-                targetScale.set(0.5, 0.5, 0.5);
-                core.material.color.setHex(0xff0055); // Turn Red
-                
-                // HAPTIC FEEDBACK (Android Only)
-                if (navigator.vibrate) navigator.vibrate(15); 
-                updateAudio(1, 1); // Loud hum
-            } else {
-                // Relaxed hand = Normal size
-                // Map distance to size (Open hand = Big object)
-                let s = THREE.MathUtils.mapLinear(pinchDist, 0.05, 0.3, 0.5, 2.5);
-                targetScale.set(s, s, s);
-                core.material.color.setHex(0x00ffff); // Back to Blue
-                updateAudio(0.5, 0.2); // Quiet hum
-            }
-
-            // 3. ROTATION (Tilt of the wrist)
-            targetRot.x = (h1[9].y - 0.5) * 3;
-            targetRot.y = (h1[9].x - 0.5) * 3;
-        } else {
-            // No hands? Return to center
-            targetPos.set(0, 0, 0);
-            targetScale.set(1, 1, 1);
-            updateAudio(0, 0); // Silence
+            const video = document.getElementById('video-preview');
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                video.play();
+                log("✅ Video Feed Active", 'success');
+                startMediaPipe(video);
+            };
+        } catch (e) {
+            log(`❌ CAMERA FAIL: ${e.name} - ${e.message}`, 'error');
+            log("👉 TIP: Check Chrome Settings > Site Settings > Camera", 'normal');
         }
-    });
-
-    // Start processing loop
-    const cameraUtils = new Camera(videoElement, {
-        onFrame: async () => { await hands.send({image: videoElement}); },
-        width: 640, height: 480
-    });
-    cameraUtils.start();
-    animate();
-}
-
-function animate() {
-    requestAnimationFrame(animate);
-
-    if (window.teleObject) {
-        // Smooth Physics (Lerp)
-        window.teleObject.position.lerp(targetPos, 0.08); // 0.08 = laggy "heavy" feel
-        window.teleObject.scale.lerp(targetScale, 0.1);
-        
-        window.teleObject.rotation.x += (targetRot.x - window.teleObject.rotation.x) * 0.05;
-        window.teleObject.rotation.y += (targetRot.y - window.teleObject.rotation.y) * 0.05;
-
-        // Idle Spin
-        crystal.rotation.z += 0.005;
-        core.rotation.y -= 0.02;
     }
 
-    renderer.render(scene, camera);
-}
+    function startMediaPipe(videoElement) {
+        log("Test 3: Starting AI Tracking...");
+        try {
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+            
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 0, // Fastest mode
+                minDetectionConfidence: 0.5
+            });
+
+            hands.onResults((results) => {
+                if(results.multiHandLandmarks.length > 0) {
+                    log("✅ HAND DETECTED! (System Working)", 'success');
+                    // Stop spamming log
+                    hands.onResults(() => {}); 
+                }
+            });
+
+            const camera = new Camera(videoElement, {
+                onFrame: async () => { await hands.send({image: videoElement}); },
+                width: 640, height: 480
+            });
+            camera.start();
+            log("✅ AI Engine Running... Wave your hand!", 'normal');
+
+        } catch(e) {
+            log(`❌ AI CRASH: ${e.message}`, 'error');
+        }
+    }
 </script>
 </body>
 </html>
