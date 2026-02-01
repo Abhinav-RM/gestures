@@ -3,166 +3,125 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Echo Particle Morph</title>
+    <title>Telekinesis Engine</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: 'Courier New', monospace; }
-        #start-screen {
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        #overlay {
             position: absolute; width: 100%; height: 100%; background: #000;
-            display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1000;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100;
         }
         button {
-            padding: 15px 40px; background: #00ffcc; border: none; border-radius: 4px;
-            font-weight: bold; cursor: pointer; box-shadow: 0 0 20px #00ffcc55;
+            padding: 20px 50px; background: none; border: 2px solid #00ffcc;
+            color: #00ffcc; font-weight: bold; cursor: pointer; letter-spacing: 2px;
         }
-        #ui-panel {
-            position: absolute; top: 10px; left: 10px; pointer-events: none; z-index: 10;
+        #status {
+            position: absolute; bottom: 20px; width: 100%; text-align: center;
+            color: #444; font-size: 10px; letter-spacing: 1px; pointer-events: none;
         }
-        .stat { color: #00ffcc; font-size: 0.9rem; margin-bottom: 5px; }
-        video { position: absolute; bottom: 10px; right: 10px; width: 100px; height: 75px; border-radius: 5px; opacity: 0.6; transform: scaleX(-1); }
+        /* Hidden video */
+        #v { position: absolute; visibility: hidden; pointer-events: none; }
     </style>
 </head>
 <body>
 
-<div id="start-screen">
-    <h1>ECHO PARTICLE SYSTEM</h1>
-    <p>Hand-Tracked 3D Environment</p>
-    <button onclick="init()">INITIALIZE</button>
+<div id="overlay">
+    <button onclick="startTelekinesis()">GRANT ACCESS & START</button>
 </div>
+<div id="status">NEURAL LINK: STANDBY</div>
+<video id="v" playsinline></video>
 
-<div id="ui-panel">
-    <div class="stat">MODE: <span id="current-shape">SPHERE</span></div>
-    <div class="stat">GESTURE: <span id="gesture-info">WAITING...</span></div>
-</div>
-
-<video id="webcam" playsinline muted></video>
-
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script type="module">
 import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
+import { Hands } from 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js';
+import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
 
-const PARTICLE_COUNT = 8000; 
-let scene, camera, renderer, particles, geometry;
-let targetPositions = new Float32Array(PARTICLE_COUNT * 3);
-let currentPositions = new Float32Array(PARTICLE_COUNT * 3);
-let morphSpeed = 0.08;
-let shapeIndex = 0;
-let lastFistTime = 0;
+let scene, camera, renderer, crystal;
+let targetPos = new THREE.Vector3(0, 0, 0);
+let targetScale = new THREE.Vector3(1, 1, 1);
+let targetRotation = new THREE.Euler();
 
-// --- 1. Shape Generators ---
-const shapes = {
-    Sphere: () => {
-        const data = new Float32Array(PARTICLE_COUNT * 3);
-        for(let i=0; i<PARTICLE_COUNT; i++) {
-            const phi = Math.acos(-1 + (2 * i) / PARTICLE_COUNT);
-            const theta = Math.sqrt(PARTICLE_COUNT * Math.PI) * phi;
-            data[i*3] = 10 * Math.cos(theta) * Math.sin(phi);
-            data[i*3+1] = 10 * Math.sin(theta) * Math.sin(phi);
-            data[i*3+2] = 10 * Math.cos(phi);
-        }
-        return data;
-    },
-    Heart: () => {
-        const data = new Float32Array(PARTICLE_COUNT * 3);
-        for(let i=0; i<PARTICLE_COUNT; i++) {
-            const t = Math.random() * Math.PI * 2;
-            data[i*3] = 0.6 * (16 * Math.pow(Math.sin(t), 3));
-            data[i*3+1] = 0.6 * (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
-            data[i*3+2] = (Math.random() - 0.5) * 5;
-        }
-        return data;
-    },
-    Saturn: () => {
-        const data = new Float32Array(PARTICLE_COUNT * 3);
-        for(let i=0; i<PARTICLE_COUNT; i++) {
-            if(i < PARTICLE_COUNT * 0.4) { // Planet
-                const phi = Math.random() * Math.PI;
-                const theta = Math.random() * Math.PI * 2;
-                data[i*3] = 6 * Math.sin(phi) * Math.cos(theta);
-                data[i*3+1] = 6 * Math.sin(phi) * Math.sin(theta);
-                data[i*3+2] = 6 * Math.cos(phi);
-            } else { // Rings
-                const angle = Math.random() * Math.PI * 2;
-                const r = 8 + Math.random() * 6;
-                data[i*3] = r * Math.cos(angle);
-                data[i*3+1] = (Math.random() - 0.5) * 0.5;
-                data[i*3+2] = r * Math.sin(angle);
-            }
-        }
-        return data;
-    }
-};
-
-const shapeKeys = Object.keys(shapes);
-
-window.init = async () => {
-    document.getElementById('start-screen').style.display = 'none';
-    const video = document.getElementById('webcam');
+window.startTelekinesis = async () => {
+    document.getElementById('overlay').style.display = 'none';
+    document.getElementById('status').innerText = "NEURAL LINK: ACTIVE";
     
-    // Three.js Setup
+    // 1. Scene Setup
     scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.z = 30;
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.z = 20;
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
     document.body.appendChild(renderer.domElement);
 
-    // Particle Geometry
-    geometry = new THREE.BufferGeometry();
-    const startData = shapes.Sphere();
-    currentPositions.set(startData);
-    targetPositions.set(startData);
-    geometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
-    
-    const mat = new THREE.PointsMaterial({ size: 0.2, color: 0x00ffcc, transparent: true, opacity: 0.8 });
-    particles = new THREE.Points(geometry, mat);
-    scene.add(particles);
+    // 2. The "Attractive" Object: An Icosahedron (Crystal)
+    const geometry = new THREE.IcosahedronGeometry(5, 0); // Low-poly for minimal look
+    const material = new THREE.MeshPhongMaterial({
+        color: 0x00ffcc,
+        wireframe: true,
+        emissive: 0x004433,
+        shininess: 100
+    });
+    crystal = new THREE.Mesh(geometry, material);
+    scene.add(crystal);
 
-    // MediaPipe
+    // Lighting
+    const light = new THREE.PointLight(0xffffff, 1, 100);
+    light.position.set(10, 10, 10);
+    scene.add(light);
+    scene.add(new THREE.AmbientLight(0x222222));
+
+    // 3. Hand Tracking
     const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6 });
-    hands.onResults(onResults);
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7 });
+    
+    hands.onResults(results => {
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const h1 = results.multiHandLandmarks[0];
+            
+            // FLY: Move object based on index finger position
+            targetPos.x = (0.5 - h1[8].x) * 40;
+            targetPos.y = (0.5 - h1[8].y) * 30;
 
-    const cam = new Camera(video, {
-        onFrame: async () => { await hands.send({image: video}); },
+            // SQUEEZE / TEAR: Use distance between thumb and index
+            const pinchDist = Math.hypot(h1[4].x - h1[8].x, h1[4].y - h1[8].y);
+            
+            if (results.multiHandLandmarks.length === 1) {
+                // Single hand zoom/scale
+                let s = THREE.MathUtils.mapLinear(pinchDist, 0.05, 0.4, 0.5, 3);
+                targetScale.set(s, s, s);
+            } else {
+                // Two hand "Tear" logic
+                const h2 = results.multiHandLandmarks[1];
+                const handDist = Math.hypot(h1[8].x - h2[8].x, h1[8].y - h2[8].y);
+                targetScale.set(handDist * 10, 1, 1); // Stretches on X axis
+            }
+            
+            // ROTATE: Based on wrist to middle finger angle
+            targetRotation.z = Math.atan2(h1[12].y - h1[0].y, h1[12].x - h1[0].x);
+        }
+    });
+
+    const v = document.getElementById('v');
+    const cam = new Camera(v, {
+        onFrame: async () => { await hands.send({image: v}); },
         width: 640, height: 480
     });
     cam.start();
     animate();
 };
 
-function onResults(results) {
-    if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) return;
-    const hand = results.multiHandLandmarks[0];
-
-    // 1. Rotation (Index Tip - Landmark 8)
-    particles.rotation.y = (0.5 - hand[8].x) * 2;
-    particles.rotation.x = (hand[8].y - 0.5) * 2;
-
-    // 2. Pinch to Expand (Thumb Tip [4] to Index Tip [8])
-    const dist = Math.hypot(hand[4].x - hand[8].x, hand[4].y - hand[8].y);
-    const scale = THREE.MathUtils.mapLinear(dist, 0.05, 0.3, 1, 3);
-    particles.scale.setScalar(scale);
-
-    // 3. Fist to Change Shape (Tips to Wrist [0])
-    const wrist = hand[0];
-    const isFist = [8, 12, 16, 20].every(tip => Math.hypot(hand[tip].x - wrist.x, hand[tip].y - wrist.y) < 0.2);
-    
-    if (isFist && Date.now() - lastFistTime > 1500) {
-        shapeIndex = (shapeIndex + 1) % shapeKeys.length;
-        targetPositions.set(shapes[shapeKeys[shapeIndex]]());
-        document.getElementById('current-shape').innerText = shapeKeys[shapeIndex];
-        lastFistTime = Date.now();
-    }
-}
-
 function animate() {
     requestAnimationFrame(animate);
-    const pos = geometry.attributes.position.array;
-    for (let i = 0; i < pos.length; i++) {
-        pos[i] += (targetPositions[i] - pos[i]) * morphSpeed;
-    }
-    geometry.attributes.position.needsUpdate = true;
+    
+    // Smooth Interpolation (The "Weight" of Telekinesis)
+    crystal.position.lerp(targetPos, 0.1);
+    crystal.scale.lerp(targetScale, 0.1);
+    crystal.rotation.z += (targetRotation.z - crystal.rotation.z) * 0.1;
+    
+    // Idle floating animation
+    crystal.rotation.y += 0.01;
+    
     renderer.render(scene, camera);
 }
 </script>
