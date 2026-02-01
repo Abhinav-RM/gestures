@@ -3,127 +3,188 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Gesture Particles</title>
+    <title>Debug Particle System</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
-        /* The Overlay Button */
-        #overlay {
+        body { margin: 0; overflow: hidden; background: #111; color: white; font-family: sans-serif; }
+        
+        /* Debug Console to see errors on phone */
+        #console-log {
+            position: absolute; top: 0; left: 0; width: 100%; height: 40%;
+            background: rgba(0,0,0,0.8); color: #00ff00; font-family: monospace;
+            font-size: 12px; overflow-y: scroll; z-index: 200; pointer-events: none;
+            padding: 10px; border-bottom: 2px solid #00ff00;
+        }
+
+        #start-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.85); display: flex; flex-direction: column;
-            justify-content: center; align-items: center; z-index: 100; color: white;
+            background: #000; z-index: 100; display: flex; 
+            flex-direction: column; justify-content: center; align-items: center;
         }
+
         button {
-            padding: 15px 30px; font-size: 1.2rem; cursor: pointer;
-            background: #00ffcc; border: none; border-radius: 50px; font-weight: bold;
+            padding: 20px 40px; font-size: 18px; background: #0088ff; color: white;
+            border: none; border-radius: 8px; margin-top: 20px;
         }
-        #video-container {
-            position: absolute; bottom: 10px; right: 10px; width: 120px; height: 90px;
-            border: 1px solid #444; border-radius: 8px; overflow: hidden; z-index: 10;
+
+        video {
+            position: absolute; bottom: 0; right: 0; width: 100px; height: 100px;
+            opacity: 0.5; z-index: 50; transform: scaleX(-1);
         }
-        #video-input { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-        #ui { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; z-index: 50; }
     </style>
 </head>
 <body>
 
-    <div id="overlay">
-        <h2>Interactive 3D Particles</h2>
-        <p>This requires camera access for hand tracking</p>
-        <button id="start-btn">START CAMERA</button>
+    <div id="console-log">Waiting for user...<br></div>
+
+    <div id="start-overlay">
+        <h1>Particle System</h1>
+        <p>Tap below to start</p>
+        <button onclick="startApp()">START CAMERA</button>
     </div>
 
-    <div id="ui">
-        <p>Shape: <span id="shape-name" style="color:#00ffcc">Sphere</span></p>
-    </div>
+    <video id="input-video" playsinline muted autoplay></video>
 
-    <div id="video-container">
-        <video id="video-input" playsinline></video>
-    </div>
-
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script type="module">
         import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
-        import { Hands } from 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js';
-        import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
+        window.THREE = THREE; // Make available globally
+    </script>
 
-        const PARTICLE_COUNT = 8000; // Lower for mobile stability
-        let scene, camera, renderer, particles, geometry;
-        let targetPositions = new Float32Array(PARTICLE_COUNT * 3);
-        let currentPositions = new Float32Array(PARTICLE_COUNT * 3);
-        let mouse = new THREE.Vector2();
-
-        // --- 1. USER INTERACTION TRIGGER ---
-        document.getElementById('start-btn').addEventListener('click', async () => {
-            document.getElementById('overlay').style.display = 'none';
-            try {
-                // Request camera explicitly first
-                await navigator.mediaDevices.getUserMedia({ video: true });
-                initThree();
-                initParticles();
-                initMediaPipe();
-                animate();
-            } catch (err) {
-                alert("Camera access denied or not supported.");
-                console.error(err);
-            }
-        });
-
-        // --- 2. THE THREE.JS ENGINE ---
-        function initThree() {
-            scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-            camera.position.z = 35;
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
+    <script>
+        // Custom Logger to print to screen
+        function log(msg) {
+            const c = document.getElementById('console-log');
+            c.innerHTML += `> ${msg}<br>`;
+            c.scrollTop = c.scrollHeight;
+            console.log(msg);
         }
 
-        function initParticles() {
-            geometry = new THREE.BufferGeometry();
-            // Create a simple sphere of particles
-            for (let i = 0; i < PARTICLE_COUNT; i++) {
-                const r = 10;
-                const theta = Math.random() * Math.PI * 2;
-                const phi = Math.acos((Math.random() * 2) - 1);
-                const x = r * Math.sin(phi) * Math.cos(theta);
-                const y = r * Math.sin(phi) * Math.sin(theta);
-                const z = r * Math.cos(phi);
-                currentPositions[i*3] = x; currentPositions[i*3+1] = y; currentPositions[i*3+2] = z;
-                targetPositions[i*3] = x; targetPositions[i*3+1] = y; targetPositions[i*3+2] = z;
-            }
-            geometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
-            const material = new THREE.PointsMaterial({ size: 0.15, color: 0x00ffcc, transparent: true, opacity: 0.8 });
-            particles = new THREE.Points(geometry, material);
-            scene.add(particles);
-        }
+        window.onerror = function(message, source, lineno, colno, error) {
+            log(`❌ ERROR: ${message} at line ${lineno}`);
+        };
 
-        // --- 3. MEDIAPIPE HANDS ---
-        function initMediaPipe() {
-            const videoElement = document.getElementById('video-input');
-            const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5 });
+        async function startApp() {
+            log("🚀 Start button clicked.");
+            document.getElementById('start-overlay').style.display = 'none';
+
+            // Check if Three.js loaded
+            if (!window.THREE) {
+                log("❌ Three.js failed to load. Check internet.");
+                return;
+            } else {
+                log("✅ Three.js loaded.");
+            }
+
+            // 1. Try to access Camera directly first
+            log("📸 Requesting Camera Access...");
             
-            hands.onResults((results) => {
-                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                    const hand = results.multiHandLandmarks[0];
-                    // Map index finger to rotation
-                    mouse.x = (1 - hand[8].x) * 2 - 1;
-                    mouse.y = -(hand[8].y * 2 - 1);
-                }
-            });
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                log("❌ Browser API error: navigator.mediaDevices is missing. Are you using HTTPS?");
+                return;
+            }
 
-            const cam = new Camera(videoElement, {
-                onFrame: async () => { await hands.send({image: videoElement}); },
-                width: 640, height: 480
-            });
-            cam.start();
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: false,
+                    video: {
+                        facingMode: 'user', // Request front camera explicitly
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    }
+                });
+                
+                log("✅ Camera Access GRANTED!");
+                const video = document.getElementById('input-video');
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    video.play();
+                    log("✅ Video stream playing.");
+                    initSystem(video);
+                };
+
+            } catch (err) {
+                log(`❌ CAMERA FAILED: ${err.name} - ${err.message}`);
+                log("💡 TIP: Check Android Settings > Chrome > Permissions");
+            }
+        }
+
+        function initSystem(videoElement) {
+            log("🧠 Initializing MediaPipe Hands...");
+            
+            try {
+                const hands = new Hands({locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                }});
+
+                hands.setOptions({
+                    maxNumHands: 1,
+                    modelComplexity: 0, // 0 is fastest for mobile
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+
+                hands.onResults(onResults);
+
+                // Start Camera Utils
+                const camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        await hands.send({image: videoElement});
+                    },
+                    width: 640,
+                    height: 480
+                });
+                camera.start();
+                log("✅ MediaPipe Started. Making 3D Scene...");
+                
+                initThreeJS();
+
+            } catch (e) {
+                log("❌ MediaPipe Error: " + e.message);
+            }
+        }
+
+        // --- Simplified Three.js for testing ---
+        let scene, camera, renderer, cube;
+        function initThreeJS() {
+            try {
+                scene = new window.THREE.Scene();
+                camera = new window.THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                renderer = new window.THREE.WebGLRenderer({alpha: true});
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                document.body.appendChild(renderer.domElement);
+
+                const geometry = new window.THREE.BoxGeometry();
+                const material = new window.THREE.MeshBasicMaterial( { color: 0x00ff00, wireframe: true } );
+                cube = new window.THREE.Mesh( geometry, material );
+                scene.add( cube );
+                camera.position.z = 5;
+
+                animate();
+                log("✅ 3D Scene Running! (Look for a spinning cube)");
+            } catch (e) {
+                log("❌ 3D Error: " + e.message);
+            }
+        }
+
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                // If we see hands, rotate the cube
+                if(cube) {
+                    cube.rotation.x += 0.1;
+                    cube.rotation.y += 0.1;
+                    // log("👋 Hand Detected!"); // Uncomment if needed, but spams log
+                }
+            }
         }
 
         function animate() {
-            requestAnimationFrame(animate);
-            particles.rotation.y += (mouse.x * 0.5 - particles.rotation.y) * 0.05;
-            particles.rotation.x += (mouse.y * 0.5 - particles.rotation.x) * 0.05;
-            renderer.render(scene, camera);
+            requestAnimationFrame( animate );
+            if(renderer && scene && camera) renderer.render( scene, camera );
         }
+
     </script>
 </body>
 </html>
