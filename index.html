@@ -2,111 +2,190 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>System Diagnostic</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Telekinesis: FINAL</title>
     <style>
-        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; font-size: 14px; }
-        h2 { border-bottom: 1px solid #0f0; padding-bottom: 10px; }
-        .log-line { margin: 5px 0; border-left: 2px solid #333; padding-left: 10px; }
-        .error { color: #ff3333; font-weight: bold; }
-        .success { color: #33ff33; }
-        button { 
-            padding: 15px; width: 100%; margin: 20px 0; 
-            background: #222; border: 1px solid #0f0; color: #0f0; font-size: 16px; 
+        body { margin: 0; overflow: hidden; background: #000; font-family: monospace; }
+        
+        /* UI Overlay */
+        #start-screen {
+            position: absolute; width: 100%; height: 100%; background: #000;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 50;
         }
-        #video-preview { width: 150px; border: 1px solid #444; margin-top: 10px; }
+        button {
+            padding: 20px 40px; background: transparent; border: 2px solid #0f0; 
+            color: #0f0; font-size: 18px; font-weight: bold; cursor: pointer;
+            box-shadow: 0 0 20px #00ff0055;
+        }
+        
+        /* Hidden Video (Must be technically 'visible' for AI to work) */
+        #input-video {
+            position: absolute; top: 0; left: 0; width: 10px; height: 10px; opacity: 0; z-index: -1;
+        }
+
+        /* Status HUD */
+        #hud {
+            position: absolute; bottom: 20px; width: 100%; text-align: center;
+            color: #00ffcc; font-size: 12px; pointer-events: none; opacity: 0.5;
+        }
     </style>
 </head>
 <body>
 
-<h2>DIAGNOSTIC MODE</h2>
-<div id="logs">Waiting for user input...</div>
-<button onclick="runDiagnostics()">START DIAGNOSTIC TEST</button>
-<video id="video-preview" playsinline muted autoplay></video>
+    <div id="start-screen">
+        <h1 style="color:white; margin-bottom: 20px;">TELEKINESIS ENGINE</h1>
+        <button onclick="activateSystem()">ACTIVATE LINK</button>
+    </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <div id="hud">SYSTEM: WAITING FOR INPUT...</div>
+    <video id="input-video" playsinline muted autoplay></video>
 
-<script>
-    const logger = document.getElementById('logs');
-    function log(msg, type = 'normal') {
-        const div = document.createElement('div');
-        div.className = 'log-line ' + type;
-        div.innerText = `> ${msg}`;
-        logger.appendChild(div);
-    }
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 
-    window.onerror = function(msg, url, line) {
-        log(`CRASH: ${msg} (Line ${line})`, 'error');
-    };
+    <script>
+        // --- CONFIGURATION ---
+        let scene, camera, renderer, crystal, core;
+        let targetPos = { x: 0, y: 0 };
+        let targetScale = 1;
+        let isPinching = false;
 
-    async function runDiagnostics() {
-        logger.innerHTML = ''; // Clear logs
-        log("Test 1: Check Libraries...");
-        
-        // STEP 1: Library Check
-        if (window.THREE) log("✅ Three.js Loaded", 'success');
-        else log("❌ Three.js MISSING", 'error');
+        async function activateSystem() {
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('hud').innerText = "SYSTEM: CALIBRATING...";
 
-        if (window.Hands) log("✅ MediaPipe Hands Loaded", 'success');
-        else log("❌ MediaPipe Hands MISSING", 'error');
+            // 1. Setup Three.js Scene
+            initGraphics();
 
-        // STEP 2: Camera Check
-        log("Test 2: Requesting Camera...");
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: 'user', width: 640 } 
-            });
-            log("✅ Camera Permission GRANTED", 'success');
-            
-            const video = document.getElementById('video-preview');
-            video.srcObject = stream;
-            video.onloadedmetadata = () => {
-                video.play();
-                log("✅ Video Feed Active", 'success');
-                startMediaPipe(video);
-            };
-        } catch (e) {
-            log(`❌ CAMERA FAIL: ${e.name} - ${e.message}`, 'error');
-            log("👉 TIP: Check Chrome Settings > Site Settings > Camera", 'normal');
+            // 2. Setup Camera
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user', width: 640, height: 480 }
+                });
+                const video = document.getElementById('input-video');
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    video.play();
+                    initAI(video);
+                };
+            } catch (e) {
+                alert("Camera Error: " + e.message);
+            }
         }
-    }
 
-    function startMediaPipe(videoElement) {
-        log("Test 3: Starting AI Tracking...");
-        try {
-            const hands = new Hands({locateFile: (file) => {
-                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-            }});
+        function initGraphics() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 25;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Create the Crystal Object
+            const group = new THREE.Group();
+
+            // Outer Shell
+            const geo1 = new THREE.IcosahedronGeometry(6, 1);
+            const mat1 = new THREE.MeshBasicMaterial({ color: 0x00ffcc, wireframe: true, transparent: true, opacity: 0.4 });
+            crystal = new THREE.Mesh(geo1, mat1);
+            group.add(crystal);
+
+            // Inner Core
+            const geo2 = new THREE.OctahedronGeometry(3, 0);
+            const mat2 = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: false });
+            core = new THREE.Mesh(geo2, mat2);
+            group.add(core);
+
+            scene.add(group);
+            window.teleObject = group; // Global reference
+
+            animate();
+        }
+
+        function initAI(videoElement) {
+            const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
             
             hands.setOptions({
                 maxNumHands: 1,
-                modelComplexity: 0, // Fastest mode
-                minDetectionConfidence: 0.5
+                modelComplexity: 0, // Fastest for mobile
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
             });
 
-            hands.onResults((results) => {
-                if(results.multiHandLandmarks.length > 0) {
-                    log("✅ HAND DETECTED! (System Working)", 'success');
-                    // Stop spamming log
-                    hands.onResults(() => {}); 
-                }
-            });
+            hands.onResults(onHandResults);
 
-            const camera = new Camera(videoElement, {
+            const cam = new Camera(videoElement, {
                 onFrame: async () => { await hands.send({image: videoElement}); },
                 width: 640, height: 480
             });
-            camera.start();
-            log("✅ AI Engine Running... Wave your hand!", 'normal');
-
-        } catch(e) {
-            log(`❌ AI CRASH: ${e.message}`, 'error');
+            cam.start();
+            document.getElementById('hud').innerText = "SYSTEM: ONLINE - RAISE HAND";
         }
-    }
-</script>
+
+        function onHandResults(results) {
+            if (results.multiHandLandmarks.length > 0) {
+                const h = results.multiHandLandmarks[0];
+                const index = h[8];  // Index Tip
+                const thumb = h[4];  // Thumb Tip
+
+                // 1. FLY: Map hand position to screen coordinates
+                // (Multiplier 40 makes it move across the whole screen)
+                targetPos.x = (0.5 - index.x) * 40; 
+                targetPos.y = (0.5 - index.y) * 40;
+
+                // 2. PINCH: Distance between thumb and index
+                const dist = Math.hypot(index.x - thumb.x, index.y - thumb.y);
+
+                if (dist < 0.05) {
+                    // SQUEEZE MODE
+                    if (!isPinching) {
+                        // Trigger Vibration ONCE when pinch starts
+                        if(navigator.vibrate) navigator.vibrate(50);
+                        isPinching = true;
+                    }
+                    targetScale = 0.5; // Shrink
+                    core.material.color.setHex(0xff0055); // Red Core
+                    crystal.rotation.z += 0.2; // Spin fast
+                } else {
+                    // HOVER MODE
+                    isPinching = false;
+                    // Map distance to size (Open hand = Big)
+                    targetScale = Math.min(Math.max(dist * 5, 0.5), 2.0);
+                    core.material.color.setHex(0x00ffff); // Blue Core
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (window.teleObject) {
+                // Smooth Physics (Lerp)
+                // Move towards hand
+                window.teleObject.position.x += (targetPos.x - window.teleObject.position.x) * 0.1;
+                window.teleObject.position.y += (targetPos.y - window.teleObject.position.y) * 0.1;
+                
+                // Scale smoothly
+                window.teleObject.scale.x += (targetScale - window.teleObject.scale.x) * 0.1;
+                window.teleObject.scale.y += (targetScale - window.teleObject.scale.y) * 0.1;
+                window.teleObject.scale.z += (targetScale - window.teleObject.scale.z) * 0.1;
+
+                // Idle Rotation
+                crystal.rotation.x += 0.005;
+                crystal.rotation.y += 0.005;
+            }
+            renderer.render(scene, camera);
+        }
+
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
 </body>
 </html>
